@@ -5,15 +5,9 @@ from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import StaleElementReferenceException
-
-from pymongo import database, collection
 
 import logging
 from datetime import datetime, date, timedelta
-from threading import Thread
-from threading import Lock
-import threading
 from multiprocessing.pool import ThreadPool
 import mongo_db_connect
 
@@ -31,9 +25,8 @@ class DatabaseAgent():
                                                        collection_name)
         self.max_threads = thread_count
         self.pool = ThreadPool(processes=thread_count)
-        self.db_lock = Lock()
 
-        logging.basicConfig(filename=datetime.now()+".log", level=logging.DEBUG)
+        logging.basicConfig(filename="logs/" + datetime.now()+".log", level=logging.DEBUG)
         logging.info("Started Database Agent")
     
     ## Helper Functions for threads
@@ -66,7 +59,7 @@ class DatabaseAgent():
                 scraper.login()
         logging.info("Thread {} finished".format(name))
 
-    def search_daterange_thread(self, name:str, start_date: date, end_date: date, court: str, case_type: str, headless: bool = True):
+    def search_daterange_thread(self, name:str, start_date: date, end_date: date, court: str, headless: bool = True):
         logging.info("Started thread: " + name)
         driver = self.setup_webdriver(headless)
         scraper = IndexScraper(driver, name)
@@ -76,7 +69,7 @@ class DatabaseAgent():
             date_string = curr_date.strftime("%m/%d/%Y")
             logging.info("Thread {}: {}/{}".format(name, date_string, end_date.strftime("%m/%d/%Y")))
             try:
-                case_list = scraper.searchAllCasesInDateRange(date_string, date_string, court, case_type)
+                case_list = scraper.searchAllCasesInDateRange(date_string, date_string, court)
                 orig_window = scraper.openCaseList(case_list, searchFirst=False)
                 case_info = scraper.readAllOpenPages(orig_window)
                 mongo_db_connect.add_list(self.collect, case_info)
@@ -111,29 +104,26 @@ class DatabaseAgent():
 
     def daterange_thread_controller(self, thread_breakup: timedelta,
                                     start_date: date, end_date: date,
-                                    courts: list, case_types: list, headless: bool):
+                                    courts: list, headless: bool):
         logging.info("Starting Date Controller")
         curr_date = start_date
         thread_args_list = []
         while curr_date <= end_date:
             next_date = max(curr_date + thread_breakup, end_date)
             for court in courts:
-                for case_t in case_types:
-                    thread_args_list.append(("Thread {}_{}_{}".format(curr_date.strftime('%m/%d/%Y'),
-                                                                      court,
-                                                                      case_t),
-                                             curr_date,
-                                             next_date,
-                                             court,
-                                             case_t,
-                                             headless))
+                thread_args_list.append(("Thread {}_{}_{}".format(curr_date.strftime('%m/%d/%Y'),
+                                                                  court),
+                                         curr_date,
+                                         next_date,
+                                         court,
+                                         headless))
             curr_date += thread_breakup
         result = self.pool.map_async(self.search_daterange_thread, thread_args_list)
         result.wait()
 
 
 class IndexScraper():
-    def __init__(self, driver: webdriver.Firefox, run_name: str, timeout: int = timeout):
+    def __init__(self, driver: webdriver.Firefox, run_name: str, timeout: int = 10000):
         self.driver = driver
         self.run_name = run_name
         self.timeout = timeout
@@ -173,17 +163,13 @@ class IndexScraper():
         WebDriverWait(self.driver, self.timeout).until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$ButtonSearch"))).click()
         return casenum
 
-    def searchAllCasesInDateRange(self, start_date: str, end_date: str, court_type: str = "Criminal"):
+    def searchAllCasesInDateRange(self, start_date: str, end_date: str, court_type: str = "Columbia Municipal Court"):
         WebDriverWait(self.driver, self.timeout).until(EC.visibility_of_element_located((By.ID, "ctl00_ContentPlaceHolder1_DropDownListAgencies")))
         court_select = Select(self.driver.find_element(by=By.ID, value = "ctl00_ContentPlaceHolder1_DropDownListAgencies"))
-        court_select.select_by_visible_text("Columbia Municipal Court")
+        court_select.select_by_visible_text(court_type)
         WebDriverWait(self.driver, self.timeout).until(EC.visibility_of_element_located((By.ID, "ctl00_ContentPlaceHolder1_DropDownListDateFilter")))
         court_select = Select(self.driver.find_element(by=By.ID, value = "ctl00_ContentPlaceHolder1_DropDownListDateFilter"))
         court_select.select_by_visible_text("Case Filed")
-
-        WebDriverWait(self.driver, self.timeout).until(EC.visibility_of_element_located((By.ID, "ctl00_ContentPlaceHolder1_DropDownListCaseTypes")))
-        case_type_select = Select(self.driver.find_element(by=By.ID, value = "ctl00_ContentPlaceHolder1_DropDownListCaseTypes"))
-        case_type_select.select_by_visible_text(court_type)
 
         WebDriverWait(self.driver, self.timeout).until(EC.visibility_of_element_located((By.ID, "ctl00_ContentPlaceHolder1_TextBoxDateFrom")))
         from_box = self.driver.find_element(by=By.ID, value="ctl00_ContentPlaceHolder1_TextBoxDateFrom")
