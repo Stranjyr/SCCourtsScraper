@@ -1,5 +1,5 @@
 import webscraper
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 def scrape_yesterday():
     yesterday = datetime.now() - timedelta(days=1)
